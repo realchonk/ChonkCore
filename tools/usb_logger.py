@@ -223,8 +223,12 @@ class FrameReader:
                 self._line = ""   # binary junk invalidates the line
 
     def _fill(self):
-        n = max(1, self.ser.in_waiting)
-        self.buf += self.ser.read(n)
+        try:
+            n = max(1, self.ser.in_waiting)
+            self.buf += self.ser.read(n)
+        except serial.SerialException:
+            # flaky USB: device dropped momentarily; wait for it to return
+            time.sleep(0.5)
 
     def read(self, timeout=0.1):
         """Return the next plausible '>' frame payload, or None."""
