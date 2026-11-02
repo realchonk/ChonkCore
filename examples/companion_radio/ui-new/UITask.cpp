@@ -1235,6 +1235,19 @@ void UITask::loop() {
 
 #ifdef PIN_BUZZER
   if (buzzer.isPlaying())  buzzer.loop();
+
+  // short 25ms blip whenever this node forwards a packet (repeater activity)
+  static uint32_t last_fwd_count = the_mesh.getForwardCount();
+  {
+    uint32_t f = the_mesh.getForwardCount();
+    if (f != last_fwd_count) {
+      bool muted = _node_prefs != NULL && _node_prefs->buzzer_quiet == BUZZER_MODE_OFF;
+      if (!muted && !buzzer.isPlaying()) {
+        tone(PIN_BUZZER, 2500, 25);
+      }
+      last_fwd_count = f;
+    }
+  }
 #endif
 
   if (curr) curr->poll();

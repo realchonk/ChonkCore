@@ -485,7 +485,9 @@ bool MyMesh::filterRecvFloodPacket(mesh::Packet* packet) {
 }
 
 bool MyMesh::allowPacketForward(const mesh::Packet* packet) {
-  return _prefs.isRepeatEn();
+  bool allow = _prefs.isRepeatEn();
+  if (allow) _fwd_count++;   // the core will retransmit this packet via us
+  return allow;
 }
 
 void MyMesh::sendFloodScoped(const TransportKey& scope, mesh::Packet* pkt, uint32_t delay_millis) {

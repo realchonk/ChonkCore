@@ -208,6 +208,11 @@ public:
   // self advert that reflects the current repeater/chat mode
   mesh::Packet* createSelfAdvertForMode();
 
+  // incremented every time the mesh core forwards a packet through this node
+  // (used e.g. to blip the buzzer on repeater activity)
+  volatile uint32_t _fwd_count = 0;
+  uint32_t getForwardCount() const { return _fwd_count; }
+
   // Send a plain text message to a contact from the device itself
   // (e.g. quick replies from the on-device UI). Returns MSG_SEND_*.
   int sendQuickText(ContactInfo* recipient, const char *text) {
