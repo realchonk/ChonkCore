@@ -767,6 +767,7 @@ public:
     }
     if (c == KEY_ENTER && _page == HomePage::REPEATER) {
       the_mesh.setRepeatEnabled(!the_mesh.isRepeatEnabled());
+      the_mesh.advert();   // immediately re-advertise with the new node type
       _task->showAlert(the_mesh.isRepeatEnabled() ? "Repeater: ON" : "Repeater: OFF", 800);
       return true;
     }

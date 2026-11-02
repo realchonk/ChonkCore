@@ -1083,7 +1083,7 @@ void MyMesh::handleCmdFrame(size_t len) {
     _iter_started = false; // stop any left-over ContactsIterator
     int i = 0;
     out_frame[i++] = RESP_CODE_SELF_INFO;
-    out_frame[i++] = ADV_TYPE_CHAT; // what this node Advert identifies as (maybe node's pronouns too?? :-)
+    out_frame[i++] = _prefs.isRepeatEn() ? ADV_TYPE_REPEATER : ADV_TYPE_CHAT; // what this node Advert identifies as
     out_frame[i++] = _prefs.tx_power_dbm;
     out_frame[i++] = MAX_LORA_TX_POWER;
     memcpy(&out_frame[i], self_id.pub_key, PUB_KEY_SIZE);
@@ -1295,12 +1295,7 @@ void MyMesh::handleCmdFrame(size_t len) {
       writeErrFrame(ERR_CODE_ILLEGAL_ARG);
     }
   } else if (cmd_frame[0] == CMD_SEND_SELF_ADVERT) {
-    mesh::Packet* pkt;
-    if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
-      pkt = createSelfAdvert(_prefs.node_name);
-    } else {
-      pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
-    }
+    mesh::Packet* pkt = createSelfAdvertForMode();
     if (pkt) {
       if (len >= 2 && cmd_frame[1] == 1) { // optional param (1 = flood, 0 = zero hop)
         unsigned long delay_millis = 0;
@@ -1379,12 +1374,7 @@ void MyMesh::handleCmdFrame(size_t len) {
   } else if (cmd_frame[0] == CMD_EXPORT_CONTACT) {
     if (len < 1 + PUB_KEY_SIZE) {
       // export SELF
-      mesh::Packet* pkt;
-      if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
-        pkt = createSelfAdvert(_prefs.node_name);
-      } else {
-        pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
-      }
+      mesh::Packet* pkt = createSelfAdvertForMode();
       if (pkt) {
         pkt->header |= ROUTE_TYPE_FLOOD; // would normally be sent in this mode
 
@@ -2434,18 +2424,29 @@ void MyMesh::loop() {
 }
 
 bool MyMesh::advert() {
-  mesh::Packet* pkt;
-  if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
-    pkt = createSelfAdvert(_prefs.node_name);
-  } else {
-    pkt = createSelfAdvert(_prefs.node_name, sensors.node_lat, sensors.node_lon);
-  }
+  mesh::Packet* pkt = createSelfAdvertForMode();
   if (pkt) {
     sendZeroHop(pkt);
     return true;
   } else {
     return false;
   }
+}
+
+// Advertise as a repeater while forwarding is enabled, as a plain chat node otherwise,
+// so the network's view always matches actual behavior.
+mesh::Packet* MyMesh::createSelfAdvertForMode() {
+  uint8_t app_data[MAX_ADVERT_DATA_SIZE];
+  uint8_t app_data_len;
+  uint8_t adv_type = _prefs.isRepeatEn() ? ADV_TYPE_REPEATER : ADV_TYPE_CHAT;
+  if (_prefs.advert_loc_policy == ADVERT_LOC_NONE) {
+    AdvertDataBuilder builder(adv_type, _prefs.node_name);
+    app_data_len = builder.encodeTo(app_data);
+  } else {
+    AdvertDataBuilder builder(adv_type, _prefs.node_name, sensors.node_lat, sensors.node_lon);
+    app_data_len = builder.encodeTo(app_data);
+  }
+  return createAdvert(self_id, app_data, app_data_len);
 }
 
 // To check if there is pending work

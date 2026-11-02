@@ -205,6 +205,9 @@ public:
   bool isRepeatEnabled() const { return _prefs.isRepeatEn(); }
   void setRepeatEnabled(bool en) { _prefs.setRepeatEn(en); savePrefs(); }
 
+  // self advert that reflects the current repeater/chat mode
+  mesh::Packet* createSelfAdvertForMode();
+
   // Send a plain text message to a contact from the device itself
   // (e.g. quick replies from the on-device UI). Returns MSG_SEND_*.
   int sendQuickText(ContactInfo* recipient, const char *text) {
