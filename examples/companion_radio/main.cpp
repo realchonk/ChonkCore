@@ -286,6 +286,9 @@ void setup() {
   the_mesh.setListener(&ui_task);
 #endif
 
+#if defined(ESP32) || defined(ESP32_PLATFORM)
+  board.applyBootClock();   // drop to the configured runtime clock now that setup is done
+#endif
   board.onBootComplete();
 }
 

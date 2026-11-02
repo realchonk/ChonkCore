@@ -768,12 +768,17 @@ void EnvironmentSensorManager::initBasicGPS() {
   // Give the GPS time to power up and emit its first NMEA sentence. Cold-start
   // modules can take several seconds, so poll for up to ~5s instead of checking
   // once after a fixed 1s delay -- returning as soon as any data appears, so
-  // fast modules add no boot delay (issue #2258).
+  // fast modules add no boot delay (issue #2258). The total wait is tunable via
+  // ENV_GPS_DETECT_MS for boards known to have no module attached.
 #ifdef ENV_SKIP_GPS_DETECT
   gps_detected = true;
 #else
+#ifndef ENV_GPS_DETECT_MS
+  #define ENV_GPS_DETECT_MS 5000
+#endif
   gps_detected = false;
-  for (int i = 0; i < 20 && !gps_detected; i++) {
+  int gps_polls = (ENV_GPS_DETECT_MS + 249) / 250;
+  for (int i = 0; i < gps_polls && !gps_detected; i++) {
     delay(250);
     gps_detected = (Serial1.available() > 0);
   }

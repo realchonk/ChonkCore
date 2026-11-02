@@ -28,7 +28,11 @@ public:
     // for future use, sub-classes SHOULD call this from their begin()
     startup_reason = BD_STARTUP_NORMAL;    
 
-  #ifdef ESP32_CPU_FREQ
+  #if defined(ESP32_CPU_FREQ) && !defined(ESP32_CPU_FREQ_AFTER_BOOT)
+    // apply the configured clock immediately. When ESP32_CPU_FREQ_AFTER_BOOT is
+    // defined, setup() instead runs at the fast framework default and the
+    // configured (battery-friendly) clock is applied by applyBootClock() at the
+    // end of setup.
     setCpuFrequencyMhz(ESP32_CPU_FREQ);
   #endif
 
@@ -53,6 +57,14 @@ public:
   }
 
   void attachDynamicPrefs(KeyValueStore* prefs) { }  // no-op
+
+  // drop to the configured (battery-friendly) clock after CPU-heavy boot work;
+  // only meaningful when ESP32_CPU_FREQ_AFTER_BOOT is defined
+  virtual void applyBootClock() {
+  #if defined(ESP32_CPU_FREQ) && defined(ESP32_CPU_FREQ_AFTER_BOOT)
+    setCpuFrequencyMhz(ESP32_CPU_FREQ);
+  #endif
+  }
 
   // Temperature from ESP32 MCU
   float getMCUTemperature() override {
