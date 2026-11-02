@@ -172,6 +172,16 @@ class HomeScreen : public UIScreen {
     return n;
   }
 
+  // pages that are hidden at runtime, e.g. GPS when no GNSS module is attached
+  bool pageHidden(uint8_t p) const {
+#if ENV_INCLUDE_GPS == 1
+    if (p == HomePage::GPS) {
+      return _sensors == NULL || !_sensors->isGPSDetected();
+    }
+#endif
+    return false;
+  }
+
 #if UI_DISCOVER_SCREEN
   DiscoveredNode discovered[DISCOVERED_NODES_TABLE_SIZE]; // not circular, latest discovered nodes are not kept
   uint32_t disc_node_req_tag = 0;
@@ -327,13 +337,19 @@ public:
       display.setColor(UIColor::title_bkg);
     }
     int y = 14;
-    int x = display.width() / 2 - 5 * (HomePage::Count-1);
-    for (uint8_t i = 0; i < HomePage::Count; i++, x += 10) {
+    int visible_count = 0;
+    for (uint8_t i = 0; i < HomePage::Count; i++) {
+      if (!pageHidden(i)) visible_count++;
+    }
+    int x = display.width() / 2 - 5 * (visible_count - 1);
+    for (uint8_t i = 0; i < HomePage::Count; i++) {
+      if (pageHidden(i)) continue;
       if (i == _page) {
         display.fillRect(x-1, y-1, 4, 4);
       } else {
         display.fillRect(x, y, 2, 2);
       }
+      x += 10;
     }
 
     if (_page == HomePage::FIRST) {
@@ -721,11 +737,15 @@ public:
       return true;   // swallow other keys while the menu is open
     }
     if (c == KEY_LEFT || c == KEY_PREV) {
-      _page = (_page + HomePage::Count - 1) % HomePage::Count;
+      do {
+        _page = (_page + HomePage::Count - 1) % HomePage::Count;
+      } while (pageHidden(_page));
       return true;
     }
     if (c == KEY_NEXT || c == KEY_RIGHT) {
-      _page = (_page + 1) % HomePage::Count;
+      do {
+        _page = (_page + 1) % HomePage::Count;
+      } while (pageHidden(_page));
       if (_page == HomePage::RECENT) {
         _task->showAlert("Recent adverts", 800);
       }
