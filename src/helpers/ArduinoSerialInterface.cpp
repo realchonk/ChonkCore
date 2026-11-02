@@ -13,7 +13,18 @@ void ArduinoSerialInterface::disable() {
   _isEnabled = false;
 }
 
-bool ArduinoSerialInterface::isConnected() const { 
+bool ArduinoSerialInterface::isConnected() const {
+#if defined(ESP32) && ARDUINO_USB_CDC_ON_BOOT
+  // for the native USB CDC interface we can tell whether a host actually has
+  // the port open -- unlike a plain UART
+  if (_is_usbcdc) {
+#if ARDUINO_USB_MODE
+    return (bool)Serial;              // USBCDC (TinyUSB): true once a host opened the port
+#else
+    return HWCDC::isConnected();      // USB-Serial-JTAG
+#endif
+  }
+#endif
   return true;   // no way of knowing, so assume yes
 }
 

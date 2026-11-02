@@ -5,6 +5,7 @@
 
 class ArduinoSerialInterface : public BaseSerialInterface {
   bool _isEnabled;
+  bool _is_usbcdc;    // true when _serial is the native USB CDC (connection state is queryable)
   uint8_t _state;
   uint16_t _frame_len;
   uint16_t rx_len;
@@ -12,13 +13,17 @@ class ArduinoSerialInterface : public BaseSerialInterface {
   uint8_t rx_buf[MAX_FRAME_SIZE];
 
 public:
-  ArduinoSerialInterface() { _isEnabled = false; _state = 0; }
+  ArduinoSerialInterface() { _isEnabled = false; _is_usbcdc = false; _state = 0; }
 
   void begin(Stream& serial) { 
     _serial = &serial; 
-  #ifdef RAK_4631
+    _is_usbcdc = false;
+#if defined(ESP32) && ARDUINO_USB_CDC_ON_BOOT
+    if (&serial == (Stream *)&Serial) _is_usbcdc = true;   // native USB CDC interface
+#endif  
+#ifdef RAK_4631
     pinMode(WB_IO2, OUTPUT);
-  #endif  
+#endif  
   }
 
   // BaseSerialInterface methods
