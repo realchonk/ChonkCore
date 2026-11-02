@@ -205,13 +205,18 @@ public:
   bool isRepeatEnabled() const { return _prefs.isRepeatEn(); }
   void setRepeatEnabled(bool en) { _prefs.setRepeatEn(en); savePrefs(); }
 
-  // self advert that reflects the current repeater/chat mode
-  mesh::Packet* createSelfAdvertForMode();
-
   // incremented every time the mesh core forwards a packet through this node
   // (used e.g. to blip the buzzer on repeater activity)
   volatile uint32_t _fwd_count = 0;
   uint32_t getForwardCount() const { return _fwd_count; }
+
+  // incremented for EVERY received LoRa packet (before validation), used for
+  // the 'geiger counter' buzzer mode
+  volatile uint32_t _rx_count = 0;
+  uint32_t getRxCount() const { return _rx_count; }
+
+  // self advert that reflects the current repeater/chat mode
+  mesh::Packet* createSelfAdvertForMode();
 
   // Send a plain text message to a contact from the device itself
   // (e.g. quick replies from the on-device UI). Returns MSG_SEND_*.

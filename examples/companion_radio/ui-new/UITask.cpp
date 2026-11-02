@@ -110,6 +110,7 @@ class HomeScreen : public UIScreen {
     BLUETOOTH,
 #ifdef PIN_BUZZER
     BUZZER,
+    GEIGER,
 #endif
     ADVERT,
 #if ENV_INCLUDE_GPS == 1
@@ -514,6 +515,16 @@ public:
           (mode == BUZZER_MODE_ALWAYS) ? "ALWAYS" : "ONLY DISCONNECTED");
       display.setColor(UIColor::secondary_txt);
       display.drawTextCentered(display.width() / 2, 56, "toggle: " PRESS_LABEL);
+    } else if (_page == HomePage::GEIGER) {
+      display.setColor(UIColor::secondary_txt);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 16, "geiger");
+      display.setColor(UIColor::corp_blue);
+      display.setTextSize(2);
+      display.drawTextCentered(display.width() / 2, 28, _node_prefs->geiger_en ? "ON" : "OFF");
+      display.setColor(UIColor::secondary_txt);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
 #endif
     } else if (_page == HomePage::ADVERT) {
       display.setColor(UIColor::corp_blue);
@@ -782,6 +793,12 @@ public:
 #ifdef PIN_BUZZER
     if (c == KEY_ENTER && _page == HomePage::BUZZER) {
       _task->cycleBuzzer();
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::GEIGER) {
+      _node_prefs->geiger_en = _node_prefs->geiger_en ? 0 : 1;
+      the_mesh.savePrefs();
+      _task->showAlert(_node_prefs->geiger_en ? "Geiger: ON" : "Geiger: OFF", 800);
       return true;
     }
 #endif
@@ -1236,13 +1253,30 @@ void UITask::loop() {
 #ifdef PIN_BUZZER
   if (buzzer.isPlaying())  buzzer.loop();
 
+  bool muted = _node_prefs != NULL && _node_prefs->buzzer_quiet == BUZZER_MODE_OFF;
+
+  // geiger counter mode: 10ms click on EVERY received LoRa packet
+  static uint32_t last_rx_count = the_mesh.getRxCount();
+  bool geiger_clicked = false;
+  if (_node_prefs != NULL && _node_prefs->geiger_en) {
+    uint32_t r = the_mesh.getRxCount();
+    if (r != last_rx_count) {
+      last_rx_count = r;
+      if (!muted && !buzzer.isPlaying()) {
+        tone(PIN_BUZZER, 4000, 10);
+        geiger_clicked = true;
+      }
+    }
+  } else {
+    last_rx_count = the_mesh.getRxCount();   // keep synced while disabled
+  }
+
   // short 25ms blip whenever this node forwards a packet (repeater activity)
   static uint32_t last_fwd_count = the_mesh.getForwardCount();
   {
     uint32_t f = the_mesh.getForwardCount();
     if (f != last_fwd_count) {
-      bool muted = _node_prefs != NULL && _node_prefs->buzzer_quiet == BUZZER_MODE_OFF;
-      if (!muted && !buzzer.isPlaying()) {
+      if (!muted && !geiger_clicked && !buzzer.isPlaying()) {
         tone(PIN_BUZZER, 2500, 25);
       }
       last_fwd_count = f;
