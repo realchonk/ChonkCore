@@ -92,6 +92,9 @@ class HomeScreen : public UIScreen {
     RECENT,
     RADIO,
     BLUETOOTH,
+#ifdef PIN_BUZZER
+    BUZZER,
+#endif
     ADVERT,
 #if ENV_INCLUDE_GPS == 1
     GPS,
@@ -380,6 +383,23 @@ public:
       display.setColor(UIColor::secondary_txt);
       display.setTextSize(1);
       display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+#ifdef PIN_BUZZER
+    } else if (_page == HomePage::BUZZER) {
+      uint8_t mode = _node_prefs->buzzer_quiet;
+      if (mode != BUZZER_MODE_ALWAYS && mode != BUZZER_MODE_OFF) mode = BUZZER_MODE_CONN;
+      display.setColor(UIColor::corp_blue);
+      display.drawXbm((display.width() - 32) / 2, 12,
+          (mode == BUZZER_MODE_OFF) ? speaker_off :
+          (mode == BUZZER_MODE_ALWAYS) ? speaker_always : speaker_conn,
+          32, 32);
+      display.setColor(UIColor::primary_txt);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 46,
+          (mode == BUZZER_MODE_OFF) ? "OFF" :
+          (mode == BUZZER_MODE_ALWAYS) ? "ALWAYS" : "ONLY DISCONNECTED");
+      display.setColor(UIColor::secondary_txt);
+      display.drawTextCentered(display.width() / 2, 56, "toggle: " PRESS_LABEL);
+#endif
     } else if (_page == HomePage::ADVERT) {
       display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
@@ -583,6 +603,12 @@ public:
       }
       return true;
     }
+#ifdef PIN_BUZZER
+    if (c == KEY_ENTER && _page == HomePage::BUZZER) {
+      _task->cycleBuzzer();
+      return true;
+    }
+#endif
     if (c == KEY_ENTER && _page == HomePage::ADVERT) {
       _task->notify(UIEventType::ack);
       if (the_mesh.advert()) {
@@ -742,7 +768,7 @@ void UITask::begin(DisplayDriver* display, SensorManager* sensors, NodePrefs* no
 
 #ifdef PIN_BUZZER
   buzzer.begin();
-  buzzer.quiet(_node_prefs->buzzer_quiet);
+  buzzer.quiet(_node_prefs->buzzer_quiet == BUZZER_MODE_OFF);
   buzzer.startup();
 #endif
 
@@ -766,28 +792,49 @@ void UITask::showAlert(const char* text, int duration_millis) {
 
 void UITask::notify(UIEventType t) {
 #if defined(PIN_BUZZER)
-switch(t){
+  bool ring = false;
+  switch(t){
   case UIEventType::contactMessage:
-    // gemini's pick
-    buzzer.play("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7");
-    break;
   case UIEventType::channelMessage:
-    buzzer.play("kerplop:d=16,o=6,b=120:32g#,32c#");
+    // ring according to the buzzer mode (see BUZZER_MODE_*)
+    if (_node_prefs != NULL) {
+      if (_node_prefs->buzzer_quiet == BUZZER_MODE_ALWAYS) ring = true;
+      else if (_node_prefs->buzzer_quiet != BUZZER_MODE_OFF) ring = !hasConnection();
+    } else {
+      ring = !hasConnection();
+    }
     break;
   case UIEventType::ack:
-    buzzer.play("ack:d=32,o=8,b=120:c");
+    ring = true;   // feedback for on-device user actions
     break;
   case UIEventType::roomMessage:
   case UIEventType::newContactMessage:
   case UIEventType::none:
   default:
     break;
-}
+  }
+  if (ring) {
+    switch(t){
+    case UIEventType::contactMessage:
+      // gemini's pick
+      buzzer.play("MsgRcv3:d=4,o=6,b=200:32e,32g,32b,16c7");
+      break;
+    case UIEventType::channelMessage:
+      buzzer.play("kerplop:d=16,o=6,b=120:32g#,32c#");
+      break;
+    case UIEventType::ack:
+      buzzer.play("ack:d=32,o=8,b=120:c");
+      break;
+    default:
+      break;
+    }
+  }
 #endif
 
 #ifdef PIN_VIBRATION
-  // Trigger vibration for all UI events except none
-  if (t != UIEventType::none) {
+  // Trigger vibration for all UI events except none (message events only
+  // vibrate when no app is connected, as before)
+  if (t != UIEventType::none && (t == UIEventType::ack || !hasConnection())) {
     vibration.trigger();
   }
 #endif
@@ -811,9 +858,7 @@ void UITask::onMessageRecv(mesh::Packet *pkt, const ContactInfo &from, uint8_t t
     }
   }
 
-  if (!hasConnection()) {
-    notify(UIEventType::contactMessage);
-  }
+  notify(UIEventType::contactMessage);   // gated by buzzer mode inside notify()
 }
 
 void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_details, const char* text) {
@@ -831,9 +876,7 @@ void UITask::onChannelMessageRecv(mesh::Packet *pkt, ChannelDetails& channel_det
     }
   }
 
-  if (!hasConnection()) {
-    notify(UIEventType::channelMessage);
-  }
+  notify(UIEventType::channelMessage);   // gated by buzzer mode inside notify()
 }
 
 void UITask::onQueueSizeChanged(int msgcount) {
@@ -1110,7 +1153,7 @@ char UITask::handleDoubleClick(char c) {
 char UITask::handleTripleClick(char c) {
   MESH_DEBUG_PRINTLN("UITask: triple click triggered");
   checkDisplayOn(c);
-  toggleBuzzer();
+  cycleBuzzer();
   c = 0;
   return c;
 }
@@ -1151,18 +1194,24 @@ void UITask::toggleGPS() {
   }
 }
 
-void UITask::toggleBuzzer() {
-    // Toggle buzzer quiet mode
+void UITask::cycleBuzzer() {
+    // Cycle buzzer mode: ONLY DISCONNECTED -> ALWAYS -> OFF -> ...
   #ifdef PIN_BUZZER
-    if (buzzer.isQuiet()) {
-      buzzer.quiet(false);
-      notify(UIEventType::ack);
-    } else {
-      buzzer.quiet(true);
+    uint8_t mode = _node_prefs->buzzer_quiet;
+    if (mode != BUZZER_MODE_ALWAYS && mode != BUZZER_MODE_OFF) {
+      mode = BUZZER_MODE_CONN;   // sanitize unknown stored values
     }
-    _node_prefs->buzzer_quiet = buzzer.isQuiet();
+    mode = (mode == BUZZER_MODE_CONN) ? BUZZER_MODE_ALWAYS
+         : (mode == BUZZER_MODE_ALWAYS) ? BUZZER_MODE_OFF
+         : BUZZER_MODE_CONN;
+    _node_prefs->buzzer_quiet = mode;
+    buzzer.quiet(mode == BUZZER_MODE_OFF);
     the_mesh.savePrefs();
-    showAlert(buzzer.isQuiet() ? "Buzzer: OFF" : "Buzzer: ON", 800);
+    if (mode != BUZZER_MODE_OFF) {
+      notify(UIEventType::ack);   // audible confirmation
+    }
+    showAlert(mode == BUZZER_MODE_OFF ? "Buzzer: OFF" :
+              mode == BUZZER_MODE_ALWAYS ? "Buzzer: ALWAYS" : "Buzzer: NO APP ONLY", 800);
     _next_refresh = 0;  // trigger refresh
   #endif
 }

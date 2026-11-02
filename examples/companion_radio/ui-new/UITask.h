@@ -14,6 +14,10 @@
 
 #ifdef PIN_BUZZER
   #include <helpers/ui/buzzer.h>
+  // buzzer modes (persisted in node pref "comp.buzz_q")
+  #define BUZZER_MODE_OFF      1   // never ring
+  #define BUZZER_MODE_CONN     0   // ring only when no app is connected (default/stock)
+  #define BUZZER_MODE_ALWAYS   2   // ring even when an app is connected
 #endif
 #ifdef PIN_VIBRATION
   #include <helpers/ui/GenericVibration.h>
@@ -104,13 +108,13 @@ public:
 
   bool isBuzzerQuiet() { 
 #ifdef PIN_BUZZER
-    return buzzer.isQuiet();
+    return _node_prefs != NULL && _node_prefs->buzzer_quiet == BUZZER_MODE_OFF;
 #else
     return true;
 #endif
   }
 
-  void toggleBuzzer();
+  void cycleBuzzer();   // cycles the buzzer mode: disconnected-only -> always -> off
   bool getGPSState();
   void toggleGPS();
 
