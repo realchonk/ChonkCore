@@ -1255,29 +1255,28 @@ void UITask::loop() {
 
   bool muted = _node_prefs != NULL && _node_prefs->buzzer_quiet == BUZZER_MODE_OFF;
 
-  // geiger counter mode: 10ms click on EVERY received LoRa packet
+  // geiger counter mode: short high tick (10ms @ 4kHz) on EVERY received LoRa packet
   static uint32_t last_rx_count = the_mesh.getRxCount();
-  bool geiger_clicked = false;
   if (_node_prefs != NULL && _node_prefs->geiger_en) {
     uint32_t r = the_mesh.getRxCount();
     if (r != last_rx_count) {
       last_rx_count = r;
       if (!muted && !buzzer.isPlaying()) {
         tone(PIN_BUZZER, 4000, 10);
-        geiger_clicked = true;
       }
     }
   } else {
     last_rx_count = the_mesh.getRxCount();   // keep synced while disabled
   }
 
-  // short 25ms blip whenever this node forwards a packet (repeater activity)
+  // forwarded packet: long low 'bloop' (40ms @ 1.5kHz) -- clearly distinct
+  // from the geiger tick (a received+forwarded packet reads as tick-bloop)
   static uint32_t last_fwd_count = the_mesh.getForwardCount();
   {
     uint32_t f = the_mesh.getForwardCount();
     if (f != last_fwd_count) {
-      if (!muted && !geiger_clicked && !buzzer.isPlaying()) {
-        tone(PIN_BUZZER, 2500, 25);
+      if (!muted && !buzzer.isPlaying()) {
+        tone(PIN_BUZZER, 1500, 40);
       }
       last_fwd_count = f;
     }
