@@ -1,3 +1,31 @@
+# ChonkCore
+
+> **This is a personal fork of [MeshCore](https://github.com/meshcore-dev/meshcore)** with custom
+> companion-radio features, maintained on the [`chonk`](../../tree/chonk) branch. Everything below
+> this section is the upstream README.
+>
+> ## What's different here
+>
+> Firmware highlights (see the `chonk` branch history for details):
+>
+> * **Combined BLE + USB companion firmware** for the Heltec V4 (non-R8), with a buzzer on GPIO 4
+>   and EU/UK (Narrow) radio defaults — 869.618 MHz / SF8 / BW62.5 / CR8
+> * **Three-state buzzer mode** — *only disconnected* / *always* / *off* — with an on-screen menu
+>   page, persisted preference, and status icons
+> * **USB CDC connection-state fix** — the USB serial interface now reports whether a host actually
+>   has the port open, so "only when disconnected" notifications work on USB builds
+> * **Quick message page** — pick a direct contact and send a predefined message using only the
+>   device button (no phone needed)
+> * **On-device repeater toggle** — enable flood forwarding without the app, including on
+>   non-whitelisted (EU narrow) frequencies
+> * **GPS page auto-hides** when no GNSS module is detected at boot
+>
+> Build & flash the combined firmware with:
+>
+> ```bash
+> pio run -e heltec_v4_companion_radio_ble_usb -t upload
+> ```
+
 ## About MeshCore
 
 MeshCore is a lightweight, portable C++ library that enables multi-hop packet routing for embedded projects using LoRa and other packet radios. It is designed for developers who want to create resilient, decentralized communication networks that work without the internet.
