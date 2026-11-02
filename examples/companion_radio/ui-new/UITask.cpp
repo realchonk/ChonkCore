@@ -68,10 +68,10 @@ public:
   }
 
   int render(DisplayDriver& display) override {
-    // meshcore logo
+    // ChonkCore logo
     display.setColor(UIColor::corp_blue);
     int logoWidth = 128;
-    display.drawXbm((display.width() - logoWidth) / 2, 3, meshcore_logo, logoWidth, 13);
+    display.drawXbm((display.width() - logoWidth) / 2, 3, chonkcore_logo, logoWidth, 13);
 
     // meshcore website
     const char* website = "https://meshcore.io";
