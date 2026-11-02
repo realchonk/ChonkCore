@@ -106,6 +106,7 @@ class HomeScreen : public UIScreen {
     CONTACTS,
     RECENT,
     RADIO,
+    REPEATER,
     BLUETOOTH,
 #ifdef PIN_BUZZER
     BUZZER,
@@ -463,6 +464,16 @@ public:
       display.setCursor(0, 53);
       sprintf(tmp, "Noise floor: %d", radio_driver.getNoiseFloor());
       display.print(tmp);
+    } else if (_page == HomePage::REPEATER) {
+      display.setColor(UIColor::secondary_txt);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 16, "repeater");
+      display.setColor(UIColor::corp_blue);
+      display.setTextSize(2);
+      display.drawTextCentered(display.width() / 2, 28, the_mesh.isRepeatEnabled() ? "ON" : "OFF");
+      display.setColor(UIColor::secondary_txt);
+      display.setTextSize(1);
+      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
     } else if (_page == HomePage::BLUETOOTH) {
       display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18,
@@ -732,6 +743,11 @@ public:
         qm_contact_idx = 0;
         qm_state = QM_SELECT_CONTACT;
       }
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::REPEATER) {
+      the_mesh.setRepeatEnabled(!the_mesh.isRepeatEnabled());
+      _task->showAlert(the_mesh.isRepeatEnabled() ? "Repeater: ON" : "Repeater: OFF", 800);
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
