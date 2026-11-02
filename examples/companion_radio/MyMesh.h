@@ -201,6 +201,22 @@ public:
     _prefs.clearDirty();
   }
 
+  // Send a plain text message to a contact from the device itself
+  // (e.g. quick replies from the on-device UI). Returns MSG_SEND_*.
+  int sendQuickText(ContactInfo* recipient, const char *text) {
+    uint32_t msg_timestamp = getRTCClock()->getCurrentTimeUnique(); // node's RTC (avoids replay protection issues)
+    uint32_t expected_ack = 0;
+    uint32_t est_timeout;
+    int result = sendMessage(*recipient, msg_timestamp, 0, text, expected_ack, est_timeout);
+    if (result != MSG_SEND_FAILED && expected_ack) {
+      expected_ack_table[next_ack_idx].msg_sent = millis(); // add to circular table
+      expected_ack_table[next_ack_idx].ack = expected_ack;
+      expected_ack_table[next_ack_idx].contact = recipient;
+      next_ack_idx = (next_ack_idx + 1) % (sizeof(expected_ack_table) / sizeof(expected_ack_table[0]));
+    }
+    return result;
+  }
+
 #if ENV_INCLUDE_GPS == 1
   void applyGpsPrefs() {
     sensors.setSettingValue("gps", _prefs.gps_enabled ? "1" : "0");

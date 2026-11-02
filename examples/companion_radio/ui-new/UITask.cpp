@@ -33,6 +33,20 @@
 
 #include "icons.h"
 
+// Predefined quick messages for the contacts page (edit to taste).
+// Each entry should be short enough to display on one line and send as one packet.
+static const char * const quick_messages[] = {
+  "Salam Aleykum",
+  "Ping",
+  "Pong",
+  "OK",
+  "Yes",
+  "No",
+  "Help",
+  "Kurwa",
+};
+static const int quick_messages_count = sizeof(quick_messages) / sizeof(quick_messages[0]);
+
 class SplashScreen : public UIScreen {
   UITask* _task;
   unsigned long dismiss_after;
@@ -89,6 +103,7 @@ public:
 class HomeScreen : public UIScreen {
   enum HomePage {
     FIRST,
+    CONTACTS,
     RECENT,
     RADIO,
     BLUETOOTH,
@@ -118,6 +133,44 @@ class HomeScreen : public UIScreen {
   uint8_t _page;
   bool _shutdown_init;
   AdvertPath recent[UI_RECENT_LIST_SIZE];
+
+  // ---- quick message state (contacts page) ----
+  enum QuickMsgState : uint8_t { QM_IDLE, QM_SELECT_CONTACT, QM_SELECT_MSG };
+  uint8_t qm_state = QM_IDLE;
+  int qm_contact_idx = 0;
+  int qm_msg_idx = 0;
+
+  static bool isUsedContactSlot(const ContactInfo& c) {
+    // only direct (person-to-person) chat contacts; skip repeaters/rooms/sensors
+    if (c.type != ADV_TYPE_CHAT) return false;
+    for (int i = 0; i < PUB_KEY_SIZE; i++) {
+      if (c.id.pub_key[i] != 0) return true;
+    }
+    return false;
+  }
+
+  // find the nth used contact slot (returns false if idx out of range)
+  bool getContactByIndex(int idx, ContactInfo& dest) {
+    ContactsIterator iter = the_mesh.startContactsIterator();
+    int n = 0;
+    while (iter.hasNext(&the_mesh, dest)) {
+      if (!isUsedContactSlot(dest)) continue;
+      if (n == idx) return true;
+      n++;
+    }
+    return false;
+  }
+
+  int countContacts() {
+    ContactInfo tmp;
+    ContactsIterator iter = the_mesh.startContactsIterator();
+    int n = 0;
+    while (iter.hasNext(&the_mesh, tmp)) {
+      if (isUsedContactSlot(tmp)) n++;
+    }
+    return n;
+  }
+
 #if UI_DISCOVER_SCREEN
   DiscoveredNode discovered[DISCOVERED_NODES_TABLE_SIZE]; // not circular, latest discovered nodes are not kept
   uint32_t disc_node_req_tag = 0;
@@ -330,6 +383,41 @@ public:
         display.setTextSize(2);
         display.drawTextCentered(display.width() / 2, 43, tmp);
         #endif
+      }
+    } else if (_page == HomePage::CONTACTS) {
+      display.setTextSize(1);
+      if (qm_state == QM_IDLE) {
+        display.setColor(UIColor::primary_txt);
+        display.drawTextCentered(display.width() / 2, display.height() / 2 - 4, "Quick message");
+      } else if (qm_state == QM_SELECT_CONTACT) {
+        ContactInfo c;
+        int total = countContacts();
+        display.setColor(UIColor::secondary_txt);
+        display.drawTextCentered(display.width() / 2, 14, "send to:");
+        display.setColor(UIColor::primary_txt);
+        if (total == 0) {
+          display.drawTextCentered(display.width() / 2, 28, "(no contacts)");
+        } else if (getContactByIndex(qm_contact_idx, c)) {
+          char filtered_name[sizeof(c.name)];
+          display.translateUTF8ToBlocks(filtered_name, c.name, sizeof(filtered_name));
+          display.drawTextEllipsized(0, 28, display.width(), filtered_name);
+          sprintf(tmp, "%d/%d", qm_contact_idx + 1, total);
+          display.setColor(UIColor::secondary_txt);
+          display.drawTextCentered(display.width() / 2, 42, tmp);
+        }
+      } else {   // QM_SELECT_MSG
+        ContactInfo c;
+        display.setColor(UIColor::secondary_txt);
+        if (getContactByIndex(qm_contact_idx, c)) {
+          char filtered_name[sizeof(c.name)];
+          display.translateUTF8ToBlocks(filtered_name, c.name, sizeof(filtered_name));
+          display.drawTextEllipsized(0, 14, display.width(), filtered_name);
+        }
+        display.setColor(UIColor::primary_txt);
+        display.drawTextCentered(display.width() / 2, 28, quick_messages[qm_msg_idx]);
+        sprintf(tmp, "%d/%d", qm_msg_idx + 1, quick_messages_count);
+        display.setColor(UIColor::secondary_txt);
+        display.drawTextCentered(display.width() / 2, 42, tmp);
       }
     } else if (_page == HomePage::RECENT) {
       the_mesh.getRecentlyHeard(recent, UI_RECENT_LIST_SIZE);
@@ -579,6 +667,48 @@ public:
   }
 
   bool handleInput(char c) override {
+    if (_page == HomePage::CONTACTS && qm_state != QM_IDLE) {
+      // quick-message menu is open: capture navigation keys
+      if (c == KEY_NEXT || c == KEY_RIGHT) {
+        if (qm_state == QM_SELECT_CONTACT) {
+          int total = countContacts();
+          if (total > 0) qm_contact_idx = (qm_contact_idx + 1) % total;
+        } else {
+          qm_msg_idx = (qm_msg_idx + 1) % quick_messages_count;
+        }
+        return true;
+      }
+      if (c == KEY_PREV || c == KEY_LEFT) {   // double press: back / close
+        qm_state = (qm_state == QM_SELECT_MSG) ? QM_SELECT_CONTACT : QM_IDLE;
+        return true;
+      }
+      if (c == KEY_ENTER) {
+        if (qm_state == QM_SELECT_CONTACT) {
+          qm_msg_idx = 0;
+          qm_state = QM_SELECT_MSG;
+        } else {   // QM_SELECT_MSG -> send the selected message
+          ContactInfo sel;
+          ContactInfo* p = NULL;
+          if (getContactByIndex(qm_contact_idx, sel)) {
+            p = the_mesh.lookupContactByPubKey(sel.id.pub_key, 6);
+          }
+          if (p != NULL) {
+            int result = the_mesh.sendQuickText(p, quick_messages[qm_msg_idx]);
+            if (result != MSG_SEND_FAILED) {
+              _task->notify(UIEventType::ack);
+              _task->showAlert(result == MSG_SEND_SENT_FLOOD ? "Sent! (flood)" : "Sent!", 1500);
+            } else {
+              _task->showAlert("Send failed..", 1500);
+            }
+          } else {
+            _task->showAlert("No contact..", 1500);
+          }
+          qm_state = QM_IDLE;
+        }
+        return true;
+      }
+      return true;   // swallow other keys while the menu is open
+    }
     if (c == KEY_LEFT || c == KEY_PREV) {
       _page = (_page + HomePage::Count - 1) % HomePage::Count;
       return true;
@@ -593,6 +723,15 @@ public:
         _task->showAlert("Repeater disc", 800);
       }
 #endif
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::CONTACTS) {
+      if (countContacts() == 0) {
+        _task->showAlert("No contacts", 1500);
+      } else {
+        qm_contact_idx = 0;
+        qm_state = QM_SELECT_CONTACT;
+      }
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
