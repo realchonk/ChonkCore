@@ -261,6 +261,27 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
     }
     adv_restart_time = 0;
   }
+
+  // watchdog: a missed disconnect callback can leave us believing a client is
+  // attached and advertising stopped -- the device then becomes invisible to
+  // every client. Periodically trust the real connection count instead.
+  {
+    static unsigned long next_adv_check = 0;
+    if (millis() > next_adv_check) {
+      next_adv_check = millis() + 10000;
+      if (_isEnabled && pServer->getConnectedCount() == 0) {
+        if (deviceConnected) {
+          BLE_DEBUG_PRINTLN("SerialBLEInterface -> stale client state, clearing");
+          deviceConnected = false;
+          clearBuffers();
+        }
+        if (!pServer->getAdvertising()->isAdvertising()) {
+          BLE_DEBUG_PRINTLN("SerialBLEInterface -> watchdog re-starting advertising");
+          pServer->getAdvertising()->start();
+        }
+      }
+    }
+  }
   return 0;
 }
 
