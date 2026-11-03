@@ -132,6 +132,11 @@ static float _pm_sleep_frac_60s = 0.0f;
 static bool _pm_window_valid = false;
 static uint64_t _pm_win_sleep_us = 0;
 static uint32_t _pm_win_start_ms = 0;
+// CPU utilization history: ring of finished 60s windows (up to 60 = 1 hour)
+#define PM_UTIL_RING_SIZE 60
+static float _pm_util_ring[PM_UTIL_RING_SIZE] = {0};
+static uint8_t _pm_util_ring_idx = 0;
+static uint8_t _pm_util_ring_count = 0;
 #endif
 
 #ifdef ESP32_PM_LIGHT_SLEEP
@@ -2476,24 +2481,48 @@ void MyMesh::checkSerialInterface() {
   }
 }
 
+void MyMesh::getCpuUtil(float& u1m, float& u5m, float& u60m) const {
+#if defined(ESP32_PM_LIGHT_SLEEP)
+  if (_pm_util_ring_count == 0) {
+    u1m = u5m = u60m = -1.0f;
+    return;
+  }
+  // newest completed window
+  float newest = _pm_util_ring[(_pm_util_ring_idx + PM_UTIL_RING_SIZE - 1) % PM_UTIL_RING_SIZE];
+  u1m = (1.0f - newest) * 100.0f;
+  auto avg_util = [&](uint8_t n) {
+    uint8_t cnt = _pm_util_ring_count < n ? _pm_util_ring_count : n;
+    float sum = 0;
+    for (uint8_t i = 0; i < cnt; i++) {
+      sum += _pm_util_ring[(_pm_util_ring_idx + PM_UTIL_RING_SIZE - 1 - i) % PM_UTIL_RING_SIZE];
+    }
+    return (1.0f - sum / cnt) * 100.0f;
+  };
+  u5m = avg_util(5);
+  u60m = avg_util(60);
+#else
+  u1m = u5m = u60m = -1.0f;
+#endif
+}
+
 void MyMesh::loop() {
 #ifdef ESP32_PM_LIGHT_SLEEP
-  // hold a no-light-sleep PM lock while any serial client (USB/WiFi) is
-  // connected, or while the USB device is merely enumerated by a host --
-  // a sleeping USB stack cannot answer the host (or esptool!), so we stay
-  // awake whenever a data host is present. Pure battery / dumb charger
-  // operation still sleeps freely.
-  if (_no_light_sleep_lock != NULL && _serial != NULL) {
-    bool conn = _serial->isConnected();
-#if defined(ESP32_PLATFORM) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_MODE
-    if (!conn) {
-      conn = tud_mounted();   // USB enumerated by a host (no client needed)
-    }
+  // hold a no-light-sleep PM lock only while a USB client actually has the
+  // CDC port open (DTR) -- BLE/WiFi clients must NOT hold it: NimBLE modem
+  // sleep is exactly what keeps the CPU napping while the phone is linked.
+  // NOTE: do not gate on "USB enumerated" (tud_mounted): this board has no
+  // VBUS sense and a wedged USB state would hold the lock forever.
+  if (_no_light_sleep_lock != NULL) {
+    bool usb_client;
+#if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_MODE
+    usb_client = (bool)Serial;   // TinyUSB CDC: true while a host keeps the port open
+#else
+    usb_client = (_serial != NULL) && _serial->isConnected();
 #endif
-    if (conn && !_ls_lock_held) {
+    if (usb_client && !_ls_lock_held) {
       esp_pm_lock_acquire(_no_light_sleep_lock);
       _ls_lock_held = true;
-    } else if (!conn && _ls_lock_held) {
+    } else if (!usb_client && _ls_lock_held) {
       esp_pm_lock_release(_no_light_sleep_lock);
       _ls_lock_held = false;
     }
@@ -2508,6 +2537,10 @@ void MyMesh::loop() {
     double slept = (double)(g_pm_sleep_us - _pm_win_sleep_us);
     _pm_sleep_frac_60s = (slept > win_us) ? 1.0f : (float)(slept / win_us);
     _pm_window_valid = true;
+    // feed the CPU-utilization ring (CPU util = 1 - sleep fraction)
+    _pm_util_ring[_pm_util_ring_idx] = _pm_sleep_frac_60s;
+    _pm_util_ring_idx = (_pm_util_ring_idx + 1) % PM_UTIL_RING_SIZE;
+    if (_pm_util_ring_count < PM_UTIL_RING_SIZE) _pm_util_ring_count++;
     _pm_win_start_ms = millis();
     _pm_win_sleep_us = g_pm_sleep_us;
   }

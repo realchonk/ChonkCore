@@ -398,10 +398,25 @@ public:
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 110, tmp);
         #else
-        display.setTextSize(2);
+        display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, tmp);
         #endif
       }
+#if defined(ESP32_PLATFORM) && defined(ESP32_PM_LIGHT_SLEEP)
+      // average CPU utilization over 1m / 5m / 60m
+      {
+        float u1, u5, u60;
+        the_mesh.getCpuUtil(u1, u5, u60);
+        display.setColor(UIColor::secondary_txt);
+        display.setTextSize(1);
+        if (u1 < 0) {
+          display.drawTextCentered(display.width() / 2, 54, "1m:-- 5m:-- 60m:--");
+        } else {
+          sprintf(tmp, "1m:%d 5m:%d 60m:%d", (int)(u1 + 0.5f), (int)(u5 + 0.5f), (int)(u60 + 0.5f));
+          display.drawTextCentered(display.width() / 2, 54, tmp);
+        }
+      }
+#endif
     } else if (_page == HomePage::CONTACTS) {
       display.setTextSize(1);
       if (qm_state == QM_IDLE) {
@@ -765,6 +780,10 @@ public:
         _task->showAlert("Repeater disc", 800);
       }
 #endif
+      return true;
+    }
+    if (c == KEY_ENTER && _page == HomePage::FIRST) {
+      _task->toggleKeepScreenOn();   // long-press on the home page: toggle screen blanking
       return true;
     }
     if (c == KEY_ENTER && _page == HomePage::CONTACTS) {
@@ -1314,7 +1333,7 @@ void UITask::loop() {
       _auto_off = millis() + AUTO_OFF_MILLIS;
     }
 #endif
-    if (millis() > _auto_off) {
+    if (!_keep_screen_on && millis() > _auto_off) {
       _display->turnOff();
     }
 #endif
@@ -1414,6 +1433,15 @@ void UITask::toggleGPS() {
       }
     }
   }
+}
+
+void UITask::toggleKeepScreenOn() {
+  _keep_screen_on = !_keep_screen_on;
+  if (!_keep_screen_on) {
+    _auto_off = millis() + AUTO_OFF_MILLIS;   // restart the blanking timer
+  }
+  showAlert(_keep_screen_on ? "Screen: always on" : "Screen: blanking on", 800);
+  _next_refresh = 0;
 }
 
 void UITask::cycleBuzzer() {

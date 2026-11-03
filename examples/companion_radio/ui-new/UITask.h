@@ -61,6 +61,7 @@ class UITask : public AbstractUITask {
 #endif
   unsigned long _next_refresh, _auto_off;
   NodePrefs* _node_prefs;
+  bool _keep_screen_on = false;   // long-press on the home page disables blanking
   char _alert[80];
   unsigned long _alert_expiry;
   int _msgcount;
@@ -115,6 +116,10 @@ public:
   }
 
   void cycleBuzzer();   // cycles the buzzer mode: disconnected-only -> always -> off
+
+  // long-press on the home page disables automatic screen blanking
+  bool isKeepScreenOn() const { return _keep_screen_on; }
+  void toggleKeepScreenOn();
   bool getGPSState();
   void toggleGPS();
 

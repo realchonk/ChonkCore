@@ -215,6 +215,10 @@ public:
   volatile uint32_t _rx_count = 0;
   uint32_t getRxCount() const { return _rx_count; }
 
+  // average CPU utilization over 1m / 5m / 60m (percent), or -1 each until
+  // measurement windows have completed (PM light sleep builds)
+  void getCpuUtil(float& u1m, float& u5m, float& u60m) const;
+
   // self advert that reflects the current repeater/chat mode
   mesh::Packet* createSelfAdvertForMode();
 
