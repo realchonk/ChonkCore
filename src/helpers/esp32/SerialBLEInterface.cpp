@@ -1,5 +1,8 @@
 #include "SerialBLEInterface.h"
 #include "esp_mac.h"
+#if defined(BLE_CONN_INTERVAL_MIN)
+  #include <esp_gap_ble_api.h>
+#endif
 
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
@@ -95,6 +98,28 @@ void SerialBLEInterface::onConnect(BLEServer* pServer) {
 void SerialBLEInterface::onConnect(BLEServer* pServer, esp_ble_gatts_cb_param_t *param) {
   BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", param->connect.conn_id, pServer->getPeerMTU(param->connect.conn_id));
   last_conn_id = param->connect.conn_id;
+
+#if defined(BLE_CONN_INTERVAL_MIN) && defined(BLE_CONN_INTERVAL_MAX)
+  // ask the central for a longer connection interval plus slave latency, so
+  // the radio/CPU only wake every interval*(latency+1) instead of every
+  // phone-default (~15-30ms) event. Latency only skips events we have nothing
+  // to send/receive -- responses still go out at the next event.
+  {
+    esp_ble_conn_update_params_t params = {};
+    memcpy(params.bda, param->connect.remote_bda, sizeof(params.bda));
+    params.min_int = BLE_CONN_INTERVAL_MIN;   // 1.25ms units
+    params.max_int = BLE_CONN_INTERVAL_MAX;
+#ifdef BLE_CONN_SLAVE_LATENCY
+    params.latency = BLE_CONN_SLAVE_LATENCY;
+#else
+    params.latency = 0;
+#endif
+    params.timeout = 600;   // 6s supervision timeout (10ms units)
+    esp_ble_gap_update_conn_params(&params);
+    BLE_DEBUG_PRINTLN("requested conn params: int=%d-%d lat=%d",
+                      params.min_int, params.max_int, params.latency);
+  }
+#endif
 }
 
 void SerialBLEInterface::onMtuChanged(BLEServer* pServer, esp_ble_gatts_cb_param_t* param) {
@@ -145,10 +170,12 @@ void SerialBLEInterface::enable() {
   pService->start();
 
   // Start advertising
-
-  //pServer->getAdvertising()->setMinInterval(500);
-  //pServer->getAdvertising()->setMaxInterval(1000);
-
+#if defined(BLE_ADV_INTERVAL_MIN) && defined(BLE_ADV_INTERVAL_MAX)
+  // slower advertising cadence saves standby power at the cost of slightly
+  // slower (re)discovery by clients; units are 0.625ms
+  pServer->getAdvertising()->setMinInterval(BLE_ADV_INTERVAL_MIN);
+  pServer->getAdvertising()->setMaxInterval(BLE_ADV_INTERVAL_MAX);
+#endif
   pServer->getAdvertising()->start();
   adv_restart_time = 0;
 }
