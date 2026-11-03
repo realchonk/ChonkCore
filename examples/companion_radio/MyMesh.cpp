@@ -111,6 +111,33 @@
 #define DIRECT_SEND_PERHOP_EXTRA_MILLIS 250
 #define LAZY_CONTACTS_WRITE_DELAY       5000
 
+#ifdef ESP32_PM_LIGHT_SLEEP
+#include <esp_pm.h>
+#include <driver/gpio.h>
+#if defined(ESP32_PLATFORM) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_MODE
+extern "C" bool tud_mounted(void);   // TinyUSB device API (libarduino_tinyusb)
+#endif
+static esp_pm_lock_handle_t _no_light_sleep_lock = NULL;
+static bool _ls_lock_held = false;
+static bool _pm_light_sleep_on = false;
+// instrumentation from the patched libesp_pm (cumulative light-sleep time)
+extern "C" {
+  extern uint64_t g_pm_sleep_us;
+  extern uint32_t g_pm_sleep_count;
+  extern uint32_t g_pm_skip_locks;   // sleep attempt blocked by a PM lock/mode
+  extern uint32_t g_pm_skip_short;   // idle window below the minimum (alarm too soon)
+}
+// rolling-window sleep fraction for the 'power' CLI command
+static float _pm_sleep_frac_60s = 0.0f;
+static bool _pm_window_valid = false;
+static uint64_t _pm_win_sleep_us = 0;
+static uint32_t _pm_win_start_ms = 0;
+#endif
+
+#ifdef ESP32_PM_LIGHT_SLEEP
+static esp_err_t _pm_cfg_err = -999;
+#endif
+
 #define PUBLIC_GROUP_PSK                "izOH6cXN6mrJ5e26oRXNcg=="
 
 // these are _pushed_ to client app at any time
@@ -983,6 +1010,23 @@ void MyMesh::begin() {
   _store->loadPrefs(_prefs);
   sensors.node_lat = _prefs.node_lat;
   sensors.node_lon = _prefs.node_lon;
+
+#ifdef ESP32_PM_LIGHT_SLEEP
+  // enable automatic light sleep between activities (CPU drops to suspend
+  // between radio events when no client is connected). Wake sources: the
+  // RTOS tick (~1ms, catches pending LoRa DIO1 interrupts), and the BLE
+  // controller (per advertising/connection events). Note: explicitly wiring
+  // the DIO1 pin as a GPIO wake source crashes gpio_intr_service on this
+  // IDF/PM combination, so we rely on the 1ms tick wake instead.
+  _no_light_sleep_lock = NULL;
+  esp_pm_lock_create(ESP_PM_NO_LIGHT_SLEEP, 0, "usb-client", &_no_light_sleep_lock);
+  esp_pm_config_esp32s3_t pm_cfg = {};
+  pm_cfg.max_freq_mhz = ESP32_CPU_FREQ;
+  pm_cfg.min_freq_mhz = 80;
+  pm_cfg.light_sleep_enable = true;
+  _pm_cfg_err = esp_pm_configure(&pm_cfg);
+  _pm_light_sleep_on = (_pm_cfg_err == ESP_OK);
+#endif
 
   // sanitise bad pref values
   _prefs.rx_delay_base = constrain(_prefs.rx_delay_base, 0, 20.0f);
@@ -2090,6 +2134,33 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
     return true;
   }
 
+#ifdef ESP32_PM_LIGHT_SLEEP
+  if (strcmp(command, "power") == 0) {
+    // CPU sleep duty cycle + rough current estimate (CPU only: ~17mA awake
+    // @80MHz, ~2.5mA in light sleep; radio/display not included)
+    double up_us = (double)millis() * 1000.0;
+    double since_boot = (double)g_pm_sleep_us / up_us;
+    if (since_boot > 1.0) since_boot = 1.0;
+    float sleep_frac = _pm_window_valid ? _pm_sleep_frac_60s : (float)since_boot;
+    float awake = 1.0f - sleep_frac;
+    float est_ma = awake * 17.0f + sleep_frac * 2.5f;
+    {
+      extern uint32_t g_idle_delays;
+      sprintf(reply, "> CPU sleep %d%% (60s) %d%% (boot), est %.1fmA, batt %dmV, n=%lu, cfg=%d, idle=%lu, skL=%lu, skS=%lu",
+              (int)(sleep_frac * 100), (int)(since_boot * 100), est_ma,
+              board.getBattMilliVolts(), (unsigned long)g_pm_sleep_count, (int)_pm_cfg_err,
+              (unsigned long)g_idle_delays,
+              (unsigned long)g_pm_skip_locks, (unsigned long)g_pm_skip_short);
+    }
+    return true;
+  }
+  if (strcmp(command, "power locks") == 0) {
+    esp_pm_dump_locks(stdout);
+    strcpy(reply, "> PM locks dumped to console");
+    return true;
+  }
+#endif
+
   if (strcmp(command, "reboot") == 0) {
     board.reboot(); // doesn't return
     return true;
@@ -2406,6 +2477,42 @@ void MyMesh::checkSerialInterface() {
 }
 
 void MyMesh::loop() {
+#ifdef ESP32_PM_LIGHT_SLEEP
+  // hold a no-light-sleep PM lock while any serial client (USB/WiFi) is
+  // connected, or while the USB device is merely enumerated by a host --
+  // a sleeping USB stack cannot answer the host (or esptool!), so we stay
+  // awake whenever a data host is present. Pure battery / dumb charger
+  // operation still sleeps freely.
+  if (_no_light_sleep_lock != NULL && _serial != NULL) {
+    bool conn = _serial->isConnected();
+#if defined(ESP32_PLATFORM) && defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_MODE
+    if (!conn) {
+      conn = tud_mounted();   // USB enumerated by a host (no client needed)
+    }
+#endif
+    if (conn && !_ls_lock_held) {
+      esp_pm_lock_acquire(_no_light_sleep_lock);
+      _ls_lock_held = true;
+    } else if (!conn && _ls_lock_held) {
+      esp_pm_lock_release(_no_light_sleep_lock);
+      _ls_lock_held = false;
+    }
+  }
+
+  // rolling 60s window: sleep fraction = delta(g_pm_sleep_us) / window time
+  if (_pm_win_start_ms == 0) {
+    _pm_win_start_ms = millis();
+    _pm_win_sleep_us = g_pm_sleep_us;
+  } else if (millis() - _pm_win_start_ms >= 60000) {
+    double win_us = (double)(millis() - _pm_win_start_ms) * 1000.0;
+    double slept = (double)(g_pm_sleep_us - _pm_win_sleep_us);
+    _pm_sleep_frac_60s = (slept > win_us) ? 1.0f : (float)(slept / win_us);
+    _pm_window_valid = true;
+    _pm_win_start_ms = millis();
+    _pm_win_sleep_us = g_pm_sleep_us;
+  }
+#endif
+
   BaseChatMesh::loop();
 
   if (_cli_rescue) {

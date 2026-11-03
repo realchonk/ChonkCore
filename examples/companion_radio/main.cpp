@@ -1,4 +1,5 @@
 #include <Arduino.h>   // needed for PlatformIO
+uint32_t g_idle_delays = 0;   // PM diagnostics: how often the main loop went idle
 #include <Mesh.h>
 #include "MyMesh.h"
 
@@ -305,11 +306,34 @@ void loop() {
   external_watchdog.loop();
 #endif
 
-  if (!the_mesh.hasPendingWork()) {
 #if defined(NRF52_PLATFORM)
+  if (!the_mesh.hasPendingWork()) {
     board.sleep(0); // nrf ignores seconds param, sleeps whenever possible
-#endif
   }
+#elif defined(ESP32_PLATFORM) && defined(ESP32_PM_LIGHT_SLEEP)
+  // the Arduino loopTask busy-spins and never yields to the idle task, so
+  // tickless light sleep can never engage -- always block briefly to let it.
+  // Adaptive: 25ms while mesh traffic flows, stretching to 100ms after a
+  // few quiet seconds. NOTE: unlike nrf52, we do NOT gate this on
+  // hasPendingWork() -- on a busy mesh the lazy contacts-write timer is
+  // refreshed by every known-contact advert, keeping it permanently true,
+  // which would reintroduce the busy-spin. Nothing pending is that urgent:
+  // outbound TX runs on the dispatcher's own (randomized) timing, and the
+  // contacts write is a 5s debounced flush. <=100ms loop latency is
+  // invisible next to the 100-500ms RX score delays.
+  {
+    static uint32_t last_activity_count = 0;
+    static uint32_t last_activity_ms = 0;
+    uint32_t counts = the_mesh.getRxCount() + the_mesh.getForwardCount();
+    if (counts != last_activity_count) {
+      last_activity_count = counts;
+      last_activity_ms = millis();
+    }
+    bool quiet = (millis() - last_activity_ms) > 2500;
+    vTaskDelay((quiet ? 100 : 25) / portTICK_PERIOD_MS);
+    g_idle_delays++;
+  }
+#endif
 
 #ifdef ENABLE_WIFI_INTERFACE
   if (wifi_enabled) {
