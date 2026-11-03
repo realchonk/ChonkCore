@@ -191,6 +191,10 @@ def decode(f, logfile, verbose):
     elif code == 10:
         if verbose:
             log(f"[{now()}] SYNC    queue drained", logfile)
+    elif code == 29:  # RESP_CODE_CLI_REPLY
+        text = f[1:].decode("utf-8", "replace").strip()
+        if text:
+            log(f"[{now()}] CLI     {text}", logfile)
     else:
         if verbose:
             log(f"[{now()}] FRAME   {name} ({len(f)} bytes)  {hexdump(f)}", logfile)
@@ -290,6 +294,8 @@ def main():
     ap.add_argument("--console", action="store_true",
                     help="also pass through console text lines (e.g. MESH_PACKET_LOGGING RX/TX lines)")
     ap.add_argument("--logfile", metavar="FILE", help="also append decoded lines to FILE")
+    ap.add_argument("--power", type=int, metavar="SECS", default=0,
+                    help="poll the device 'power' CLI command every SECS seconds (sleep duty cycle + est. current)")
     args = ap.parse_args()
 
     logfile = open(args.logfile, "a") if args.logfile else None
@@ -311,8 +317,16 @@ def main():
         time.sleep(1.0)
 
     reader = FrameReader(ser)
+    next_power_poll = time.time() + (args.power if args.power > 0 else 1e9)
     try:
         while True:
+            if args.power > 0 and time.time() >= next_power_poll:
+                # NOTE: polling holds the USB port open, which keeps the CPU
+                # awake (the device holds a no-light-sleep lock while a client
+                # is connected) -- run one window without polling to measure
+                # the true sleep duty cycle.
+                send_cmd(ser, bytes([CMD_RUN_CLI_COMMAND]) + b"power")
+                next_power_poll = time.time() + args.power
             frame = reader.read(timeout=0.5)
             if args.console and reader.lines:
                 for line in reader.lines:
