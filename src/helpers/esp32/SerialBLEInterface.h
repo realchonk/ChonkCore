@@ -1,17 +1,29 @@
 #pragma once
 
 #include "../BaseSerialInterface.h"
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
-#include <BLE2902.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
+#ifdef USE_NIMBLE
+  #include <NimBLEDevice.h>
+#else
+  #include <BLEDevice.h>
+  #include <BLEServer.h>
+  #include <BLEUtils.h>
+  #include <BLE2902.h>
+#endif
+
+#ifdef USE_NIMBLE
+class SerialBLEInterface : public BaseSerialInterface, NimBLESecurityCallbacks, NimBLEServerCallbacks, NimBLECharacteristicCallbacks {
+  NimBLEServer *pServer;
+  NimBLEService *pService;
+  NimBLECharacteristic * pTxCharacteristic;
+#else
 class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLEServerCallbacks, BLECharacteristicCallbacks {
   BLEServer *pServer;
   BLEService *pService;
   BLECharacteristic * pTxCharacteristic;
+#endif
   bool deviceConnected;
   bool oldDeviceConnected;
   bool _isEnabled;
@@ -35,6 +47,23 @@ class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLE
   void clearBuffers();
 
 protected:
+#ifdef USE_NIMBLE
+  // NimBLESecurityCallbacks methods
+  uint32_t onPassKeyRequest() override;
+  void onPassKeyNotify(uint32_t pass_key) override;
+  bool onConfirmPIN(uint32_t pin) override;
+  bool onSecurityRequest() override;
+  void onAuthenticationComplete(ble_gap_conn_desc* desc) override;
+
+  // NimBLEServerCallbacks methods
+  void onConnect(NimBLEServer* pServer) override;
+  void onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) override;
+  void onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) override;
+  void onDisconnect(NimBLEServer* pServer) override;
+
+  // NimBLECharacteristicCallbacks methods
+  void onWrite(NimBLECharacteristic* pCharacteristic) override;
+#else
   // BLESecurityCallbacks methods
   uint32_t onPassKeyRequest() override;
   void onPassKeyNotify(uint32_t pass_key) override;
@@ -50,6 +79,7 @@ protected:
 
   // BLECharacteristicCallbacks methods
   void onWrite(BLECharacteristic* pCharacteristic, esp_ble_gatts_cb_param_t* param) override;
+#endif
 
 public:
   SerialBLEInterface() {
