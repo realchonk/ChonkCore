@@ -31,6 +31,7 @@ class SerialBLEInterface : public BaseSerialInterface, BLESecurityCallbacks, BLE
   uint32_t _pin_code;
   unsigned long _last_write;
   unsigned long adv_restart_time;
+  unsigned long _conn_start_ms;   // when the current link was established
 
   struct Frame {
     uint8_t len;
@@ -91,6 +92,7 @@ public:
     _isEnabled = false;
     _last_write = 0;
     last_conn_id = 0;
+    _conn_start_ms = 0;
     recv_queue = xQueueCreateStatic(
       FRAME_QUEUE_SIZE, sizeof(Frame), recv_queue_storage, &recv_queue_state
     );
@@ -111,6 +113,8 @@ public:
   bool isEnabled() const override { return _isEnabled; }
 
   bool isConnected() const override;
+
+  void clearBonds() override;
 
   bool isWriteBusy() const override;
   size_t writeFrame(const uint8_t src[], size_t len) override;

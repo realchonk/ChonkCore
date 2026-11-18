@@ -131,6 +131,14 @@ public:
     return false;
   }
 
+  void clearBonds() override {
+    for(auto iface : _interfaces){
+      if(iface.instance){
+        iface.instance->clearBonds();
+      }
+    }
+  }
+
   // loop all interfaces
   void loop() override {
     for(auto iface : _interfaces){

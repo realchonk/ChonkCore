@@ -16,6 +16,11 @@ public:
   virtual bool isConnected() const = 0;
   virtual void loop() {};
 
+  // Drop stored pairing bonds when the transport keeps them (BLE); no-op
+  // elsewhere. Used by the "ble reset" CLI command when a client and device
+  // disagree about an old bond.
+  virtual void clearBonds() {}
+
   virtual bool isWriteBusy() const = 0;
   virtual size_t writeFrame(const uint8_t src[], size_t len) = 0;
   virtual size_t checkRecvFrame(uint8_t dest[]) = 0;

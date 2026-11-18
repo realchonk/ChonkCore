@@ -2171,6 +2171,18 @@ bool MyMesh::handleCommand(const char* command, uint32_t sender_timestamp, char*
     return true;
   }
 
+  if (strcmp(command, "ble reset") == 0) {
+    // Forget every stored pairing key and start advertising again. Needed
+    // when the phone still has an old bond that the device no longer knows.
+    if (_serial != nullptr) {
+      _serial->clearBonds();
+      strcpy(reply, "> BLE bonds cleared; advertising restarted");
+    } else {
+      strcpy(reply, "> no serial interface");
+    }
+    return true;
+  }
+
   if (strcmp(command, "poweroff") == 0 || strcmp(command, "shutdown") == 0) {
     board.powerOff(); // doesn't return
     return true;

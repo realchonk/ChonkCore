@@ -1,6 +1,6 @@
 #include "SerialBLEInterface.h"
 #include "esp_mac.h"
-#if defined(BLE_CONN_INTERVAL_MIN) && !defined(USE_NIMBLE)
+#if !defined(USE_NIMBLE)
   #include <esp_gap_ble_api.h>
 #endif
 
@@ -13,6 +13,7 @@
 
 #define ADVERT_RESTART_DELAY  1000   // millis
 #define BLE_WRITE_MIN_INTERVAL   60
+#define BLE_AUTH_TIMEOUT_MS   60000   // drop a link that never finishes pairing
 
 #ifdef USE_NIMBLE
 // ============================ NimBLE host ============================
@@ -84,6 +85,12 @@ void SerialBLEInterface::onAuthenticationComplete(ble_gap_conn_desc* desc) {
     deviceConnected = true;
   } else {
     BLE_DEBUG_PRINTLN(" - SecurityCallback - Authentication Failure*");
+    if (desc != nullptr) {
+      // The stored key is unusable (client re-paired after we lost our bonds,
+      // or it is a stale bond). Drop it so the next attempt starts a clean
+      // pairing instead of failing against the same dead key forever.
+      NimBLEDevice::deleteBond(NimBLEAddress(desc->peer_id_addr));
+    }
     if (pServer != nullptr) {
       pServer->disconnect(desc ? desc->conn_handle : last_conn_id);
     }
@@ -98,7 +105,9 @@ void SerialBLEInterface::onConnect(NimBLEServer* pServer) {
 
 void SerialBLEInterface::onConnect(NimBLEServer* pServer, ble_gap_conn_desc* desc) {
   last_conn_id = desc->conn_handle;
-  BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, mtu=%d", desc->conn_handle,
+  _conn_start_ms = millis();
+  BLE_DEBUG_PRINTLN("onConnect(), conn_id=%d, peer=%s, mtu=%d", desc->conn_handle,
+                    NimBLEAddress(desc->peer_id_addr).toString().c_str(),
                     ble_att_mtu(desc->conn_handle));
 
 #if defined(BLE_CONN_INTERVAL_MIN) && defined(BLE_CONN_INTERVAL_MAX)
@@ -125,6 +134,7 @@ void SerialBLEInterface::onMTUChange(uint16_t MTU, ble_gap_conn_desc* desc) {
 void SerialBLEInterface::onDisconnect(NimBLEServer* pServer) {
   BLE_DEBUG_PRINTLN("onDisconnect()");
   deviceConnected = false;
+  _conn_start_ms = 0;
   if (_isEnabled) {
     adv_restart_time = millis() + ADVERT_RESTART_DELAY;
   }
@@ -158,7 +168,14 @@ void SerialBLEInterface::clearBuffers() {
 }
 
 void SerialBLEInterface::enable() {
-  if (_isEnabled) return;
+  if (_isEnabled) {
+    // Already enabled: make sure a previous connection attempt did not leave
+    // us with advertising stopped and no client attached.
+    if (pServer->getConnectedCount() == 0 && !pServer->getAdvertising()->isAdvertising()) {
+      pServer->getAdvertising()->start();
+    }
+    return;
+  }
 
   _isEnabled = true;
   clearBuffers();
@@ -172,6 +189,8 @@ void SerialBLEInterface::enable() {
   pServer->getAdvertising()->setMaxInterval(BLE_ADV_INTERVAL_MAX);
 #endif
   pServer->getAdvertising()->start();
+  BLE_DEBUG_PRINTLN("SerialBLEInterface -> enabled, advertising=%d",
+                    (int)pServer->getAdvertising()->isAdvertising());
   adv_restart_time = 0;
 }
 
@@ -184,7 +203,24 @@ void SerialBLEInterface::disable() {
   pServer->disconnect(last_conn_id);
   // (NimBLE 1.4 has no service stop; disconnect + adv stop is enough)
   oldDeviceConnected = deviceConnected = false;
+  _conn_start_ms = 0;
   adv_restart_time = 0;
+}
+
+void SerialBLEInterface::clearBonds() {
+  BLE_DEBUG_PRINTLN("SerialBLEInterface::clearBonds");
+
+  NimBLEDevice::deleteAllBonds();
+  if (pServer != nullptr) {
+    pServer->getAdvertising()->stop();
+    pServer->disconnect(last_conn_id);
+  }
+  oldDeviceConnected = deviceConnected = false;
+  _conn_start_ms = 0;
+  clearBuffers();
+  if (_isEnabled) {
+    adv_restart_time = millis() + ADVERT_RESTART_DELAY;
+  }
 }
 
 bool SerialBLEInterface::isConnected() const {
@@ -269,15 +305,25 @@ size_t SerialBLEInterface::checkRecvFrame(uint8_t dest[]) {
     static unsigned long next_adv_check = 0;
     if (millis() > next_adv_check) {
       next_adv_check = millis() + 10000;
-      if (_isEnabled && pServer->getConnectedCount() == 0) {
-        if (deviceConnected) {
-          BLE_DEBUG_PRINTLN("SerialBLEInterface -> stale client state, clearing");
-          deviceConnected = false;
-          clearBuffers();
-        }
-        if (!pServer->getAdvertising()->isAdvertising()) {
-          BLE_DEBUG_PRINTLN("SerialBLEInterface -> watchdog re-starting advertising");
-          pServer->getAdvertising()->start();
+      if (_isEnabled) {
+        if (pServer->getConnectedCount() == 0) {
+          if (deviceConnected) {
+            BLE_DEBUG_PRINTLN("SerialBLEInterface -> stale client state, clearing");
+            deviceConnected = false;
+            clearBuffers();
+          }
+          if (!pServer->getAdvertising()->isAdvertising()) {
+            BLE_DEBUG_PRINTLN("SerialBLEInterface -> watchdog re-starting advertising");
+            pServer->getAdvertising()->start();
+          }
+        } else if (!deviceConnected && _conn_start_ms != 0
+                   && millis() - _conn_start_ms > BLE_AUTH_TIMEOUT_MS) {
+          // A link that never completes pairing just ties up the radio and
+          // hides the device from the client that actually wants to connect.
+          BLE_DEBUG_PRINTLN("SerialBLEInterface -> pairing timed out, disconnecting");
+          pServer->disconnect(last_conn_id);
+          _conn_start_ms = 0;
+          adv_restart_time = millis() + ADVERT_RESTART_DELAY;
         }
       }
     }
@@ -463,6 +509,33 @@ void SerialBLEInterface::disable() {
   // (NimBLE 1.4 has no service stop; disconnect + adv stop is enough)
   oldDeviceConnected = deviceConnected = false;
   adv_restart_time = 0;
+}
+
+void SerialBLEInterface::clearBonds() {
+  BLE_DEBUG_PRINTLN("SerialBLEInterface::clearBonds");
+
+  int count = esp_ble_get_bond_device_num();
+  if (count > 0) {
+    esp_ble_bond_dev_t* bonds = (esp_ble_bond_dev_t*)malloc(count * sizeof(esp_ble_bond_dev_t));
+    if (bonds != nullptr) {
+      if (esp_ble_get_bond_device_list(&count, bonds) == ESP_OK) {
+        for (int i = 0; i < count; i++) {
+          esp_ble_remove_bond_device(bonds[i].bd_addr);
+        }
+      }
+      free(bonds);
+    }
+  }
+
+  if (pServer != nullptr) {
+    pServer->getAdvertising()->stop();
+    pServer->disconnect(last_conn_id);
+  }
+  oldDeviceConnected = deviceConnected = false;
+  clearBuffers();
+  if (_isEnabled) {
+    adv_restart_time = millis() + ADVERT_RESTART_DELAY;
+  }
 }
 
 size_t SerialBLEInterface::writeFrame(const uint8_t src[], size_t len) {
